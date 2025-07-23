@@ -116,5 +116,58 @@ class Order {
 
         return false;
     }
+    public function getStatusHistory($order_id) {
+        $query = "SELECT * FROM order_status_history 
+                    WHERE order_id = ? 
+                    ORDER BY created_at DESC";
+                    
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(1, $order_id);
+        $stmt->execute();
+        
+        return $stmt;
+    }
+
+    public function updateOrderStatus($order_id, $new_status, $comment = '') {
+        // Vérifier que la transition de statut est valide
+        $valid_transitions = [
+            'pending' => ['paid', 'cancelled'],
+            'paid' => ['shipped', 'cancelled'],
+            'shipped' => ['delivered']
+        ];
+        
+        $current_status = $this->getCurrentStatus($order_id);
+        
+        if (!in_array($new_status, $valid_transitions[$current_status] ?? [])) {
+            return false;
+        }
+        
+        // Mettre à jour le statut principal
+        $query = "UPDATE orders SET status = ? WHERE id = ?";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(1, $new_status);
+        $stmt->bindParam(2, $order_id);
+        $stmt->execute();
+        
+        // Ajouter à l'historique
+        $query = "INSERT INTO order_status_history 
+                SET order_id = ?, status = ?, comments = ?";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(1, $order_id);
+        $stmt->bindParam(2, $new_status);
+        $stmt->bindParam(3, $comment);
+        
+        return $stmt->execute();
+    }
+
+    private function getCurrentStatus($order_id) {
+        $query = "SELECT status FROM orders WHERE id = ? LIMIT 1";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(1, $order_id);
+        $stmt->execute();
+        
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row['status'] ?? null;
+    }
 }
 ?>

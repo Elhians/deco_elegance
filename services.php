@@ -10,8 +10,9 @@
         </div>
         <div class="services-container">
             <?php 
-            $serviceController = new ServiceController();
-            $services = $serviceController->getAllServices();
+            //$serviceController = new ServiceController();
+            //$services = $serviceController->getAllServices();
+            $services = get_services(); 
             
             if (empty($services)): ?>
                 <div class="empty-state">

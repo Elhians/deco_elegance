@@ -318,8 +318,8 @@ if (isset($_GET['logout'])) {
             
             <div class="services-container">
                 <?php 
-                $serviceController = new ServiceController();
-                $services = $serviceController->getAllServices();
+                //$serviceController = new ServiceController();
+                $services = get_services();
                 $services = array_slice($services, 0, 3);
                 
                 if (empty($services)): ?>

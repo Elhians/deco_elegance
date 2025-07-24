@@ -1,8 +1,8 @@
 <?php
-require_once '../models/Order.php';
-require_once '../models/Product.php';
-require_once '../config/database.php';
-require_once '../includes/functions.php';
+    require_once __DIR__ . '/../models/Order.php';
+    require_once __DIR__ . '/../models/Product.php';
+    require_once __DIR__ . '/../config/database.php';
+    require_once __DIR__ . '/../includes/functions.php';
 
 class OrderController {
     private $db;
@@ -13,75 +13,106 @@ class OrderController {
         $this->db = $database->getConnection();
         $this->order = new Order($this->db);
     }
-    public function createOrderFromCart($user_id, $shipping_address) {
-        $cart = new Cart();
-        $cart_items = $cart->getItems();
-        
-        if (empty($cart_items)) {
+    
+    // Créer une commande à partir du panier
+    public function createOrderFromCart($user_id, $shipping_address = null) {
+        if (!isset($_SESSION['cart']) || empty($_SESSION['cart'])) {
             return ['success' => false, 'message' => 'Le panier est vide'];
         }
 
-        $database = new Database();
-        $db = $database->getConnection();
+        $cart_items = $_SESSION['cart'];
         
         try {
-            $db->beginTransaction();
-
-            // Calculer le total et vérifier les stocks
+            $this->db->beginTransaction();
+            
+            // Créer la commande
+            $this->order->user_id = $user_id;
+            $this->order->total = 0;
+            $this->order->status = 'En attente';
+            
+            // Calculer le total et valider le stock
+            $items_for_order = [];
             $total = 0;
-            $order_items = [];
-            $product = new Product($db);
             
             foreach ($cart_items as $product_id => $quantity) {
+                $product = new Product($this->db);
                 $product->id = $product_id;
-                $product->readOne();
                 
-                if ($product->stock < $quantity) {
-                    throw new Exception("Stock insuffisant pour: {$product->name}");
+                if (!$product->readOne()) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'Produit non trouvé: ID ' . $product_id];
                 }
                 
-                $subtotal = $product->price * $quantity;
-                $total += $subtotal;
+                if ($product->stock < $quantity) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'Stock insuffisant pour: ' . $product->name];
+                }
                 
-                $order_items[] = [
+                $item_total = $product->price * $quantity;
+                $items_for_order[] = [
                     'product_id' => $product_id,
                     'quantity' => $quantity,
-                    'price' => $product->price
+                    'price' => $product->price,
+                    'total' => $item_total
                 ];
+                
+                $total += $item_total;
             }
-
-            // Créer la commande
-            $order = new Order($db);
-            $order->user_id = $user_id;
-            $order->total = $total;
-            $order->items = $order_items;
             
-            if (!$order->create()) {
-                throw new Exception("Erreur lors de la création de la commande");
-            }
-
-            // Mettre à jour les stocks
-            foreach ($cart_items as $product_id => $quantity) {
-                $query = "UPDATE products SET stock = stock - ? WHERE id = ?";
-                $stmt = $db->prepare($query);
-                $stmt->execute([$quantity, $product_id]);
-            }
-
-            $db->commit();
-            $cart->clear();
+            $this->order->total = $total;
+            $order_id = $this->order->create();
             
-            return [
-                'success' => true,
-                'order_id' => $order->id,
-                'total' => $total,
-                'message' => 'Commande passée avec succès'
-            ];
+            if (!$order_id) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'Erreur lors de la création de la commande'];
+            }
+            
+            // Ajouter les articles à la commande
+            foreach ($items_for_order as $item) {
+                if (!$this->order->addOrderItem($order_id, $item['product_id'], $item['quantity'], $item['price'])) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'Erreur lors de l\'ajout des articles à la commande'];
+                }
+                
+                // Mettre à jour le stock
+                $product = new Product($this->db);
+                $product->id = $item['product_id'];
+                $product->readOne();
+                $product->stock -= $item['quantity'];
+                $product->update();
+            }
+            
+            $this->db->commit();
+            return ['success' => true, 'order_id' => $order_id];
             
         } catch (Exception $e) {
-            $db->rollBack();
-            return ['success' => false, 'message' => $e->getMessage()];
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'Erreur: ' . $e->getMessage()];
         }
     }
+
+    // Récupérer les commandes d'un utilisateur avec leur statut
+    public function getUserOrdersWithStatus($user_id) {
+        $stmt = $this->order->readByUser($user_id);
+        
+        if(!$stmt) {
+            return ['success' => false, 'message' => 'Erreur lors de la récupération des commandes'];
+        }
+        
+        $orders = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $orders[] = [
+                'id' => $row['id'],
+                'total' => $row['total'],
+                'status' => $row['status'],
+                'created_at' => $row['created_at'],
+                'items_count' => $row['items_count'] ?? 0
+            ];
+        }
+        
+        return ['success' => true, 'orders' => $orders];
+    }
+
     // Créer une nouvelle commande
     public function createOrder($user_id, $items) {
         // Valider les articles
@@ -204,36 +235,6 @@ class OrderController {
             ],
             'status_history' => $status_history
         ];
-    }
-
-    public function getUserOrdersWithStatus($user_id, $status = null) {
-        $query = "SELECT o.id, o.total, o.status, o.created_at, 
-                        COUNT(i.id) as items_count
-                FROM orders o
-                LEFT JOIN order_items i ON o.id = i.order_id
-                WHERE o.user_id = ?";
-        
-        if ($status) {
-            $query .= " AND o.status = ?";
-        }
-        
-        $query .= " GROUP BY o.id ORDER BY o.created_at DESC";
-        
-        $stmt = $this->db->prepare($query);
-        $stmt->bindParam(1, $user_id);
-        
-        if ($status) {
-            $stmt->bindParam(2, $status);
-        }
-        
-        $stmt->execute();
-        
-        $orders = [];
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $orders[] = $row;
-        }
-        
-        return ['success' => true, 'orders' => $orders];
     }
 }
 ?>

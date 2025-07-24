@@ -2,8 +2,8 @@
 class Database {
     private $host = "localhost";
     private $db_name = "deco_elegance";
-    private $username = "root";
-    private $password = "";
+    private $username = "niass";
+    private $password = "passer";
     public $conn;
 
     public function getConnection() {

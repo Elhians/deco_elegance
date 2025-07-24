@@ -1,5 +1,7 @@
 -- Création de la base de données
 CREATE DATABASE IF NOT EXISTS deco_elegance;
+GRANT ALL PRIVILEGES ON deco_elegance.* TO 'niass'@'localhost';
+FLUSH PRIVILEGES;
 USE deco_elegance;
 
 -- Table des utilisateurs
